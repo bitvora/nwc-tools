@@ -17,10 +17,8 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// NWCMethod is the "method" in NWC requests
 type NWCMethod string
 
-// Some NWC methods:
 const (
 	MethodGetInfo          NWCMethod = "get_info"
 	MethodPayInvoice       NWCMethod = "pay_invoice"
@@ -31,26 +29,22 @@ const (
 	MethodMakeChainAddress NWCMethod = "make_chain_address"
 )
 
-// NWCRequest basic structure.
 type NWCRequest struct {
 	Method string      `json:"method"`
 	Params interface{} `json:"params,omitempty"`
 }
 
-// Generic response structure for NWC
 type NWCResponse struct {
 	ResultType string          `json:"result_type"`
 	Error      *NWCError       `json:"error,omitempty"`
 	Result     json.RawMessage `json:"result,omitempty"`
 }
 
-// NWCError represents an error in the response
 type NWCError struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 }
 
-// Response-specific result structures
 type GetInfoResult struct {
 	Alias         string   `json:"alias"`
 	Color         string   `json:"color,omitempty"`
@@ -104,18 +98,15 @@ type ListTransactionsResult struct {
 	Transactions []Transaction `json:"transactions"`
 }
 
-// Style definitions
 var (
-	// Colors
-	accentColor    = lipgloss.Color("#FFBF00") // Gold
-	secondaryColor = lipgloss.Color("#6699CC") // Blue
-	successColor   = lipgloss.Color("#28A745") // Green
-	errorColor     = lipgloss.Color("#DC3545") // Red
-	warningColor   = lipgloss.Color("#FFC107") // Amber
-	infoColor      = lipgloss.Color("#17A2B8") // Cyan
-	mutedColor     = lipgloss.Color("#869099") // Gray
+	accentColor    = lipgloss.Color("#FFBF00")
+	secondaryColor = lipgloss.Color("#6699CC")
+	successColor   = lipgloss.Color("#28A745")
+	errorColor     = lipgloss.Color("#DC3545")
+	warningColor   = lipgloss.Color("#FFC107")
+	infoColor      = lipgloss.Color("#17A2B8")
+	mutedColor     = lipgloss.Color("#869099")
 
-	// Styles
 	titleStyle = lipgloss.NewStyle().
 			Foreground(accentColor).
 			Bold(true).
@@ -153,11 +144,9 @@ var (
 )
 
 func main() {
-	// Command-line flag for log level
 	logLevel := flag.String("loglevel", "info", "Set log level (debug, info, warn, error)")
 	flag.Parse()
 
-	// Set log level based on the flag
 	switch *logLevel {
 	case "debug":
 		log.SetLevel(log.DebugLevel)
@@ -175,7 +164,6 @@ func main() {
 
 	fmt.Println(titleStyle.Render("=== Nostr Wallet Connect (NWC) Demo ==="))
 
-	// 1. Read NWC connection string from the user:
 	reader := bufio.NewReader(os.Stdin)
 	fmt.Print(labelStyle.Render("NWC URL") + valueStyle.Render("Enter NWC connection string (e.g. nostr+walletconnect://...): "))
 	connStr, _ := reader.ReadString('\n')
@@ -195,7 +183,6 @@ func main() {
 		"secretLen":    len(parsed.WalletSecret),
 	}).Debug("Successfully parsed NWC connection string")
 
-	// 2. We'll set up an ephemeral key pair for this client
 	clientSecretKey := nostr.GeneratePrivateKey()
 	clientPubKey, err := nostr.GetPublicKey(clientSecretKey)
 	if err != nil {
@@ -207,14 +194,10 @@ func main() {
 
 	fmt.Println(successStyle.Render("✓ ") + "Connected with client key: " + highlightStyle.Render(clientPubKey))
 
-	// 3. Use go-nostr's SimplePool to connect to the provided relay
 	ctx := context.Background()
 	pool := nostr.NewSimplePool(ctx)
 	since := nostr.Timestamp(time.Now().Unix())
 
-	// Subscribe to responses from the wallet
-	// The wallet should send events with kind=24134 (KindNWCWalletResponse)
-	// tagged with p=<clientPubKey> and e=<requestID>.
 	log.WithFields(log.Fields{
 		"relay":    parsed.Relay,
 		"clientPK": clientPubKey,
@@ -222,13 +205,12 @@ func main() {
 	}).Debug("Setting up subscription for responses")
 
 	filters := nostr.Filter{
-		Kinds: []int{nostr.KindNWCWalletResponse}, // 24134
+		Kinds: []int{nostr.KindNWCWalletResponse},
 		Tags:  nostr.TagMap{"p": []string{clientPubKey}},
 		Since: &since,
 	}
 	sub := pool.SubscribeMany(ctx, []string{parsed.Relay}, filters)
 
-	// We'll handle responses in a goroutine
 	responses := make(chan nostr.Event, 10)
 
 	go func() {
@@ -239,7 +221,6 @@ func main() {
 				continue
 			}
 
-			// Log more details about incoming responses
 			log.WithFields(log.Fields{
 				"eventID": evt.Event.ID,
 				"kind":    evt.Event.Kind,
@@ -252,14 +233,12 @@ func main() {
 		}
 	}()
 
-	// 4. Send a get_info request
 	fmt.Println(subtitleStyle.Render("\nSending get_info request to wallet..."))
 	err = sendNWCRequest(ctx, pool, parsed, clientSecretKey, clientPubKey, MethodGetInfo, nil)
 	if err != nil {
 		log.WithError(err).Error("Error sending get_info request")
 		fmt.Println(errorStyle.Render("Error: ") + err.Error())
 	} else {
-		// Wait for the response (we only do a quick wait here)
 		select {
 		case resp := <-responses:
 			log.WithField("eventID", resp.ID).Debug("Got response for get_info")
@@ -271,7 +250,6 @@ func main() {
 				log.WithField("decrypted", decrypted).Debug("Decrypted get_info response")
 				log.WithField("decryptedContent", decrypted).Debug("Decrypted content for unmarshalling")
 
-				// Parse and display the response
 				displayParsedResponse(decrypted)
 			}
 
@@ -281,7 +259,6 @@ func main() {
 		}
 	}
 
-	// 5. Drop into an interactive command loop for the user
 	fmt.Println(boxStyle.Render(fmt.Sprintf(`%s
    make_invoice <amount_msat> <description> [<expiry_seconds>]
    pay_invoice <lightning_invoice_string>
@@ -314,7 +291,7 @@ func main() {
 			}
 			amount := cmdParts[1]
 			desc := cmdParts[2]
-			expiry := "3600" // default
+			expiry := "3600"
 			if len(cmdParts) > 3 {
 				expiry = cmdParts[3]
 			}
@@ -355,7 +332,6 @@ func main() {
 			waitForPrettyResponse(responses, clientSecretKey, parsed.WalletPubKey)
 
 		case "list_transactions":
-			// you can add optional from/until/limit etc. For simplicity, send empty.
 			params := map[string]interface{}{}
 			err := sendNWCRequest(ctx, pool, parsed, clientSecretKey, clientPubKey, MethodListTransactions, params)
 			if err != nil {
@@ -378,9 +354,6 @@ func main() {
 	}
 }
 
-// Step A: parse NWC connection string of form:
-//
-//	nostr+walletconnect://<pubkey>?relay=<relayURL>&secret=<secretKey>
 type nwcParsed struct {
 	WalletPubKey string
 	Relay        string
@@ -414,7 +387,6 @@ func parseNWCConnectionString(nwc string) (*nwcParsed, error) {
 		key := p[0]
 		val := p[1]
 		if key == "relay" {
-			// Decode the relay URL
 			decodedRelay, err := url.QueryUnescape(val)
 			if err != nil {
 				log.WithError(err).Error("Failed to decode relay URL")
@@ -439,7 +411,6 @@ func parseNWCConnectionString(nwc string) (*nwcParsed, error) {
 	}, nil
 }
 
-// Step B: Actually build and publish an NWC request event
 func sendNWCRequest(
 	ctx context.Context,
 	pool *nostr.SimplePool,
@@ -455,7 +426,6 @@ func sendNWCRequest(
 		"walletPubKey": nwc.WalletPubKey,
 	}).Debug("Preparing to send NWC request")
 
-	// Our request object
 	req := NWCRequest{
 		Method: string(method),
 		Params: params,
@@ -467,7 +437,6 @@ func sendNWCRequest(
 	}
 	log.WithField("request", string(bytesReq)).Debug("Marshalled request")
 
-	// We must do NIP04 encryption with the wallet's pubkey using our ephemeral private key
 	log.Debug("Computing shared secret")
 	sharedSecret, err := nip04.ComputeSharedSecret(nwc.WalletPubKey, clientSecKey)
 	if err != nil {
@@ -484,9 +453,6 @@ func sendNWCRequest(
 	}
 	log.WithField("encryptedLength", len(encryptedContent)).Debug("Successfully encrypted content")
 
-	// According to the NWC spec:
-	//   * "request" events use kind=24133 (NWCWalletRequest)
-	//   * 'p' tag set to the wallet's pubkey
 	event := nostr.Event{
 		Kind:      nostr.KindNWCWalletRequest,
 		PubKey:    clientPubKey,
@@ -496,7 +462,6 @@ func sendNWCRequest(
 			nostr.Tag{"p", nwc.WalletPubKey},
 		},
 	}
-	// Sign with the ephemeral key
 	log.Debug("Signing event with client key")
 	event.Sign(clientSecKey)
 	log.WithFields(log.Fields{
@@ -504,7 +469,6 @@ func sendNWCRequest(
 		"eventID":   event.ID,
 	}).Debug("Event signed")
 
-	// Check if the event is valid before publishing
 	ok, err := event.CheckSignature()
 	if err != nil || !ok {
 		log.WithError(err).WithField("valid", ok).Error("Event signature validation failed")
@@ -512,7 +476,6 @@ func sendNWCRequest(
 	}
 	log.Debug("Event signature validated successfully")
 
-	// Publish to the wallet's relay
 	log.WithFields(log.Fields{
 		"relay":   nwc.Relay,
 		"eventID": event.ID,
@@ -542,7 +505,6 @@ func sendNWCRequest(
 	return nil
 }
 
-// waitForPrettyResponse waits for a response and displays it prettily
 func waitForPrettyResponse(
 	responses chan nostr.Event,
 	clientSecKey string,
@@ -564,7 +526,6 @@ func waitForPrettyResponse(
 			log.WithField("content", decrypted).Debug("Successfully decrypted response")
 			fmt.Println(subtitleStyle.Render("Response received (Event ID: ") + highlightStyle.Render(resp.ID) + subtitleStyle.Render(")"))
 
-			// Parse and display the response in a pretty way
 			displayParsedResponse(decrypted)
 		}
 	case <-time.After(10 * time.Second):
@@ -573,10 +534,7 @@ func waitForPrettyResponse(
 	}
 }
 
-// Decrypt the content from the wallet. The wallet's `PubKey` in the event
-// is the NWC wallet's pubkey. The event's `Content` is NIP-04 encrypted to us.
 func decryptResponseContent(ev nostr.Event, clientSecKey, walletPubKey string) (string, error) {
-	// Extract e tags for debugging
 	var referencedEvents []string
 	for _, tag := range ev.Tags {
 		if tag[0] == "e" && len(tag) > 1 {
@@ -591,13 +549,11 @@ func decryptResponseContent(ev nostr.Event, clientSecKey, walletPubKey string) (
 		"referencedEvents": referencedEvents,
 	}).Debug("Attempting to decrypt response content")
 
-	// Check if the pubkey matches what we expect
 	if ev.PubKey != walletPubKey {
 		log.WithFields(log.Fields{
 			"expectedPubKey": walletPubKey,
 			"actualPubKey":   ev.PubKey,
 		}).Warn("Response pubkey doesn't match wallet pubkey")
-		// Continue anyway, as some wallets might use different keys
 	}
 
 	sharedSecret, err := nip04.ComputeSharedSecret(ev.PubKey, clientSecKey)
@@ -617,7 +573,6 @@ func decryptResponseContent(ev nostr.Event, clientSecKey, walletPubKey string) (
 	return decrypted, nil
 }
 
-// Parse and display the response in a pretty way
 func displayParsedResponse(jsonStr string) {
 	var resp NWCResponse
 	err := json.Unmarshal([]byte(jsonStr), &resp)
@@ -627,13 +582,11 @@ func displayParsedResponse(jsonStr string) {
 		return
 	}
 
-	// Check for error first
 	if resp.Error != nil {
 		fmt.Println(errorStyle.Render("Error: ") + resp.Error.Code + " - " + resp.Error.Message)
 		return
 	}
 
-	// Process by result type
 	switch resp.ResultType {
 	case "get_info":
 		displayGetInfoResult(resp.Result)
@@ -642,13 +595,12 @@ func displayParsedResponse(jsonStr string) {
 	case "make_invoice":
 		displayMakeInvoiceResult(resp.Result)
 	case "lookup_invoice":
-		displayMakeInvoiceResult(resp.Result) // Same structure as make_invoice
+		displayMakeInvoiceResult(resp.Result)
 	case "get_balance":
 		displayGetBalanceResult(resp.Result)
 	case "list_transactions":
 		displayListTransactionsResult(resp.Result)
 	default:
-		// For any other result type, just pretty print the JSON
 		var prettyJSON map[string]interface{}
 		json.Unmarshal(resp.Result, &prettyJSON)
 		jsonBytes, _ := json.MarshalIndent(prettyJSON, "", "  ")
@@ -656,8 +608,6 @@ func displayParsedResponse(jsonStr string) {
 		fmt.Println(boxStyle.Render(highlightStyle.Render("Result Type: ") + resp.ResultType + "\n\n" + string(jsonBytes)))
 	}
 }
-
-// Display functions for each result type
 
 func displayGetInfoResult(resultJson json.RawMessage) {
 	var result GetInfoResult
@@ -738,7 +688,6 @@ func displayMakeInvoiceResult(resultJson json.RawMessage) {
 		return
 	}
 
-	// Format timestamps
 	created := time.Unix(result.CreatedAt, 0).Format("2006-01-02 15:04:05")
 	expires := ""
 	if result.ExpiresAt > 0 {
@@ -769,7 +718,6 @@ func displayMakeInvoiceResult(resultJson json.RawMessage) {
 		valueStyle.Render(expires),
 	)
 
-	// Add the actual invoice at the bottom in a highlighted box
 	if result.Invoice != "" {
 		invoiceBox := lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
@@ -793,7 +741,6 @@ func displayGetBalanceResult(resultJson json.RawMessage) {
 		return
 	}
 
-	// Format balance in both sats and msats
 	balanceSats := float64(result.Balance) / 1000.0
 
 	content := fmt.Sprintf(`%s
@@ -828,23 +775,18 @@ func displayListTransactionsResult(resultJson json.RawMessage) {
 		return
 	}
 
-	// Create a header
 	transactionsList := subtitleStyle.Render("Recent Transactions") + "\n\n"
 
-	// Add divider line
 	divider := strings.Repeat("─", 50) + "\n"
 	transactionsList += divider
 
-	// Add each transaction
 	for i, tx := range result.Transactions {
-		// Format timestamps
 		created := time.Unix(tx.CreatedAt, 0).Format("2006-01-02 15:04:05")
 		settled := ""
 		if tx.SettledAt > 0 {
 			settled = time.Unix(tx.SettledAt, 0).Format("2006-01-02 15:04:05")
 		}
 
-		// Pick color based on type
 		typeColor := successColor
 		if tx.Type == "outgoing" {
 			typeColor = warningColor
@@ -859,7 +801,6 @@ func displayListTransactionsResult(resultJson json.RawMessage) {
 		}
 		amountStyle := lipgloss.NewStyle().Foreground(typeColor).Bold(true).Render(amountStr)
 
-		// Format the payment hash safely
 		paymentHashDisplay := "N/A"
 		if len(tx.PaymentHash) > 0 {
 			if len(tx.PaymentHash) > 16 {
@@ -891,7 +832,6 @@ func displayListTransactionsResult(resultJson json.RawMessage) {
 
 		transactionsList += txContent + "\n"
 
-		// Add divider between transactions
 		if i < len(result.Transactions)-1 {
 			transactionsList += divider
 		}
@@ -900,7 +840,6 @@ func displayListTransactionsResult(resultJson json.RawMessage) {
 	fmt.Println(boxStyle.Render(transactionsList))
 }
 
-// Helper for command parsing
 func parseInt(s string) int64 {
 	var val int64
 	fmt.Sscanf(s, "%d", &val)
