@@ -776,7 +776,7 @@ func displayMakeInvoiceResult(resultJson json.RawMessage) {
 			BorderForeground(successColor).
 			Padding(1).
 			Align(lipgloss.Center).
-			Render(result.Invoice)
+			Render(lipgloss.NewStyle().Width(50).Render(result.Invoice))
 
 		content = content + "\n\n" + invoiceBox
 	}
