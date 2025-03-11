@@ -20,13 +20,15 @@ import (
 type NWCMethod string
 
 const (
-	MethodGetInfo          NWCMethod = "get_info"
-	MethodPayInvoice       NWCMethod = "pay_invoice"
-	MethodMakeInvoice      NWCMethod = "make_invoice"
-	MethodLookupInvoice    NWCMethod = "lookup_invoice"
-	MethodListTransactions NWCMethod = "list_transactions"
-	MethodGetBalance       NWCMethod = "get_balance"
-	MethodMakeChainAddress NWCMethod = "make_chain_address"
+	MethodGetInfo               NWCMethod = "get_info"
+	MethodPayInvoice            NWCMethod = "pay_invoice"
+	MethodMakeInvoice           NWCMethod = "make_invoice"
+	MethodLookupInvoice         NWCMethod = "lookup_invoice"
+	MethodListTransactions      NWCMethod = "list_transactions"
+	MethodGetBalance            NWCMethod = "get_balance"
+	MethodMakeChainAddress      NWCMethod = "make_chain_address"
+	MethodListChainTransactions NWCMethod = "list_chain_transactions"
+	MethodPayChainAddress       NWCMethod = "pay_chain_address"
 )
 
 type NWCRequest struct {
@@ -98,6 +100,23 @@ type ListTransactionsResult struct {
 	Transactions []Transaction `json:"transactions"`
 }
 
+type ChainTransaction struct {
+	Type          string      `json:"type"`
+	TxID          string      `json:"txid"`
+	Amount        int64       `json:"amount"`
+	Confirmations int         `json:"confirmations"`
+	Metadata      interface{} `json:"metadata,omitempty"`
+	Address       string      `json:"address,omitempty"`
+}
+
+type ListChainTransactionsResult struct {
+	Transactions []ChainTransaction `json:"transactions"`
+}
+
+type PayChainAddressResult struct {
+	TxID string `json:"txid"`
+}
+
 var (
 	accentColor    = lipgloss.Color("#FFBF00")
 	secondaryColor = lipgloss.Color("#6699CC")
@@ -144,7 +163,7 @@ var (
 )
 
 func main() {
-	logLevel := flag.String("loglevel", "info", "Set log level (debug, info, warn, error)")
+	logLevel := flag.String("loglevel", "debug", "Set log level (debug, info, warn, error)")
 	flag.Parse()
 
 	switch *logLevel {
@@ -264,7 +283,9 @@ func main() {
    pay_invoice <lightning_invoice_string>
    get_balance
    list_transactions
+   list_chain_transactions [limit] [from_timestamp] [until_timestamp] [offset]
    make_chain_address
+   pay_chain_address <address> <amount>
    exit`, titleStyle.Render("Available commands:"))))
 
 	for {
@@ -338,6 +359,40 @@ func main() {
 				fmt.Println(errorStyle.Render("Error: ") + "Failed to send list_transactions request: " + err.Error())
 				continue
 			}
+
+			// Add debug logging to confirm the request was sent
+			log.Info("list_transactions request sent, waiting for response...")
+
+			waitForPrettyResponse(responses, clientSecretKey, parsed.WalletPubKey)
+
+		case "list_chain_transactions":
+			params := map[string]interface{}{}
+
+			// Parse optional parameters
+			if len(cmdParts) > 1 {
+				limit := parseInt(cmdParts[1])
+				params["limit"] = limit
+			}
+			if len(cmdParts) > 2 {
+				from := parseInt(cmdParts[2])
+				params["from"] = from
+			}
+			if len(cmdParts) > 3 {
+				until := parseInt(cmdParts[3])
+				params["until"] = until
+			}
+			if len(cmdParts) > 4 {
+				offset := parseInt(cmdParts[4])
+				params["offset"] = offset
+			}
+
+			err := sendNWCRequest(ctx, pool, parsed, clientSecretKey, clientPubKey, MethodListChainTransactions, params)
+			if err != nil {
+				fmt.Println(errorStyle.Render("Error: ") + "Failed to send list_chain_transactions request: " + err.Error())
+				continue
+			}
+
+			log.Info("list_chain_transactions request sent, waiting for response...")
 			waitForPrettyResponse(responses, clientSecretKey, parsed.WalletPubKey)
 
 		case "make_chain_address":
@@ -348,8 +403,26 @@ func main() {
 			}
 			waitForPrettyResponse(responses, clientSecretKey, parsed.WalletPubKey)
 
+		case "pay_chain_address":
+			if len(cmdParts) < 3 {
+				fmt.Println(errorStyle.Render("Usage: pay_chain_address <address> <amount>"))
+				continue
+			}
+			address := cmdParts[1]
+			amount := cmdParts[2]
+			params := map[string]interface{}{
+				"address": address,
+				"amount":  parseInt(amount),
+			}
+			err := sendNWCRequest(ctx, pool, parsed, clientSecretKey, clientPubKey, MethodPayChainAddress, params)
+			if err != nil {
+				fmt.Println(errorStyle.Render("Error: ") + "Failed to send pay_chain_address request: " + err.Error())
+				continue
+			}
+			waitForPrettyResponse(responses, clientSecretKey, parsed.WalletPubKey)
+
 		default:
-			fmt.Println(errorStyle.Render("Unrecognized command. Try: make_invoice, pay_invoice, get_balance, list_transactions, make_chain_address, exit"))
+			fmt.Println(errorStyle.Render("Unrecognized command. Try: make_invoice, pay_invoice, get_balance, list_transactions, list_chain_transactions, make_chain_address, pay_chain_address, exit"))
 		}
 	}
 }
@@ -525,7 +598,6 @@ func waitForPrettyResponse(
 		} else {
 			log.WithField("content", decrypted).Debug("Successfully decrypted response")
 			fmt.Println(subtitleStyle.Render("Response received (Event ID: ") + highlightStyle.Render(resp.ID) + subtitleStyle.Render(")"))
-
 			displayParsedResponse(decrypted)
 		}
 	case <-time.After(10 * time.Second):
@@ -600,6 +672,8 @@ func displayParsedResponse(jsonStr string) {
 		displayGetBalanceResult(resp.Result)
 	case "list_transactions":
 		displayListTransactionsResult(resp.Result)
+	case "list_chain_transactions":
+		displayListChainTransactionsResult(resp.Result)
 	default:
 		var prettyJSON map[string]interface{}
 		json.Unmarshal(resp.Result, &prettyJSON)
@@ -718,18 +792,12 @@ func displayMakeInvoiceResult(resultJson json.RawMessage) {
 		valueStyle.Render(expires),
 	)
 
+	// Instead of a styled box, we will print the invoice in a plain format
 	if result.Invoice != "" {
-		invoiceBox := lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(successColor).
-			Padding(1).
-			Align(lipgloss.Center).
-			Render(lipgloss.NewStyle().Width(50).Render(result.Invoice))
-
-		content = content + "\n\n" + invoiceBox
+		content += fmt.Sprintf("\n\n%s\n", result.Invoice) // Add the invoice string directly
 	}
 
-	fmt.Println(boxStyle.Render(content))
+	fmt.Println(boxStyle.Render(content)) // Keep the box style for the rest of the content
 }
 
 func displayGetBalanceResult(resultJson json.RawMessage) {
@@ -828,6 +896,79 @@ func displayListTransactionsResult(resultJson json.RawMessage) {
 			valueStyle.Render(created),
 			labelStyle.Render("Settled:"),
 			valueStyle.Render(settled),
+		)
+
+		transactionsList += txContent + "\n"
+
+		if i < len(result.Transactions)-1 {
+			transactionsList += divider
+		}
+	}
+
+	fmt.Println(boxStyle.Render(transactionsList))
+}
+
+func displayListChainTransactionsResult(resultJson json.RawMessage) {
+	var result ListChainTransactionsResult
+	err := json.Unmarshal(resultJson, &result)
+	if err != nil {
+		log.WithError(err).Error("Failed to parse list_chain_transactions result")
+		fmt.Println(errorStyle.Render("Error: ") + "Failed to parse list_chain_transactions result: " + err.Error())
+		return
+	}
+
+	if len(result.Transactions) == 0 {
+		fmt.Println(boxStyle.Render(subtitleStyle.Render("Chain Transactions") + "\n\nNo on-chain transactions found."))
+		return
+	}
+
+	transactionsList := subtitleStyle.Render("Recent On-Chain Transactions") + "\n\n"
+
+	divider := strings.Repeat("─", 50) + "\n"
+	transactionsList += divider
+
+	for i, tx := range result.Transactions {
+		typeColor := successColor
+		if tx.Type == "outgoing" {
+			typeColor = warningColor
+		}
+
+		txType := lipgloss.NewStyle().Foreground(typeColor).Bold(true).Render(tx.Type)
+		amountStr := fmt.Sprintf("%d sats", tx.Amount)
+		if tx.Type == "outgoing" {
+			amountStr = "-" + amountStr
+		} else {
+			amountStr = "+" + amountStr
+		}
+		amountStyle := lipgloss.NewStyle().Foreground(typeColor).Bold(true).Render(amountStr)
+
+		txidDisplay := "N/A"
+		if len(tx.TxID) > 0 {
+			if len(tx.TxID) > 16 {
+				txidDisplay = tx.TxID[:16] + "..."
+			} else {
+				txidDisplay = tx.TxID
+			}
+		}
+
+		txContent := fmt.Sprintf(`%s %s   %s
+
+%s %s
+%s %d
+%s %s
+%s %s`,
+			txType,
+			txidDisplay,
+			amountStyle,
+
+			labelStyle.Render("Transaction ID:"),
+			valueStyle.Render(tx.TxID),
+			labelStyle.Render("Amount:"),
+			tx.Amount,
+			labelStyle.Render("Type:"),
+			valueStyle.Render(tx.Type),
+			labelStyle.Render("Address:"),
+			valueStyle.Render(tx.Address),
 		)
 
 		transactionsList += txContent + "\n"
