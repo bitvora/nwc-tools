@@ -202,14 +202,15 @@ func main() {
 		"secretLen":    len(parsed.WalletSecret),
 	}).Debug("Successfully parsed NWC connection string")
 
-	clientSecretKey := nostr.GeneratePrivateKey()
+	// Use the secret from the connection string as the client secret key
+	clientSecretKey := parsed.WalletSecret
 	clientPubKey, err := nostr.GetPublicKey(clientSecretKey)
 	if err != nil {
 		log.WithError(err).Error("Could not derive pubkey")
 		fmt.Println(errorStyle.Render("Error: Could not derive pubkey"))
 		return
 	}
-	log.WithField("clientPubKey", clientPubKey).Info("Generated client ephemeral keypair")
+	log.WithField("clientPubKey", clientPubKey).Info("Using client keypair from connection string")
 
 	fmt.Println(successStyle.Render("✓ ") + "Connected with client key: " + highlightStyle.Render(clientPubKey))
 
@@ -253,29 +254,12 @@ func main() {
 	}()
 
 	fmt.Println(subtitleStyle.Render("\nSending get_info request to wallet..."))
-	err = sendNWCRequest(ctx, pool, parsed, clientSecretKey, clientPubKey, MethodGetInfo, nil)
+	eventID, err := sendNWCRequest(ctx, pool, parsed, clientSecretKey, clientPubKey, MethodGetInfo, nil)
 	if err != nil {
 		log.WithError(err).Error("Error sending get_info request")
 		fmt.Println(errorStyle.Render("Error: ") + err.Error())
 	} else {
-		select {
-		case resp := <-responses:
-			log.WithField("eventID", resp.ID).Debug("Got response for get_info")
-			decrypted, err := decryptResponseContent(resp, clientSecretKey, parsed.WalletPubKey)
-			if err != nil {
-				log.WithError(err).Error("Failed to decrypt response")
-				fmt.Println(errorStyle.Render("Error: ") + "Failed to decrypt response: " + err.Error())
-			} else {
-				log.WithField("decrypted", decrypted).Debug("Decrypted get_info response")
-				log.WithField("decryptedContent", decrypted).Debug("Decrypted content for unmarshalling")
-
-				displayParsedResponse(decrypted)
-			}
-
-		case <-time.After(5 * time.Second):
-			log.Warn("Timed out waiting for get_info response")
-			fmt.Println(errorStyle.Render("Timed out waiting for get_info response."))
-		}
+		waitForPrettyResponse(responses, clientSecretKey, parsed.WalletPubKey, eventID)
 	}
 
 	fmt.Println(boxStyle.Render(fmt.Sprintf(`%s
@@ -321,12 +305,12 @@ func main() {
 				"description": desc,
 				"expiry":      parseInt(expiry),
 			}
-			err := sendNWCRequest(ctx, pool, parsed, clientSecretKey, clientPubKey, MethodMakeInvoice, params)
+			eventID, err := sendNWCRequest(ctx, pool, parsed, clientSecretKey, clientPubKey, MethodMakeInvoice, params)
 			if err != nil {
 				fmt.Println(errorStyle.Render("Error: ") + "Failed to send make_invoice request: " + err.Error())
 				continue
 			}
-			waitForPrettyResponse(responses, clientSecretKey, parsed.WalletPubKey)
+			waitForPrettyResponse(responses, clientSecretKey, parsed.WalletPubKey, eventID)
 
 		case "pay_invoice":
 			if len(cmdParts) < 2 {
@@ -337,24 +321,24 @@ func main() {
 			params := map[string]interface{}{
 				"invoice": invoice,
 			}
-			err := sendNWCRequest(ctx, pool, parsed, clientSecretKey, clientPubKey, MethodPayInvoice, params)
+			eventID, err := sendNWCRequest(ctx, pool, parsed, clientSecretKey, clientPubKey, MethodPayInvoice, params)
 			if err != nil {
 				fmt.Println(errorStyle.Render("Error: ") + "Failed to send pay_invoice request: " + err.Error())
 				continue
 			}
-			waitForPrettyResponse(responses, clientSecretKey, parsed.WalletPubKey)
+			waitForPrettyResponse(responses, clientSecretKey, parsed.WalletPubKey, eventID)
 
 		case "get_balance":
-			err := sendNWCRequest(ctx, pool, parsed, clientSecretKey, clientPubKey, MethodGetBalance, nil)
+			eventID, err := sendNWCRequest(ctx, pool, parsed, clientSecretKey, clientPubKey, MethodGetBalance, nil)
 			if err != nil {
 				fmt.Println(errorStyle.Render("Error: ") + "Failed to send get_balance request: " + err.Error())
 				continue
 			}
-			waitForPrettyResponse(responses, clientSecretKey, parsed.WalletPubKey)
+			waitForPrettyResponse(responses, clientSecretKey, parsed.WalletPubKey, eventID)
 
 		case "list_transactions":
 			params := map[string]interface{}{}
-			err := sendNWCRequest(ctx, pool, parsed, clientSecretKey, clientPubKey, MethodListTransactions, params)
+			eventID, err := sendNWCRequest(ctx, pool, parsed, clientSecretKey, clientPubKey, MethodListTransactions, params)
 			if err != nil {
 				fmt.Println(errorStyle.Render("Error: ") + "Failed to send list_transactions request: " + err.Error())
 				continue
@@ -363,7 +347,7 @@ func main() {
 			// Add debug logging to confirm the request was sent
 			log.Info("list_transactions request sent, waiting for response...")
 
-			waitForPrettyResponse(responses, clientSecretKey, parsed.WalletPubKey)
+			waitForPrettyResponse(responses, clientSecretKey, parsed.WalletPubKey, eventID)
 
 		case "list_chain_transactions":
 			params := map[string]interface{}{}
@@ -386,22 +370,22 @@ func main() {
 				params["offset"] = offset
 			}
 
-			err := sendNWCRequest(ctx, pool, parsed, clientSecretKey, clientPubKey, MethodListChainTransactions, params)
+			eventID, err := sendNWCRequest(ctx, pool, parsed, clientSecretKey, clientPubKey, MethodListChainTransactions, params)
 			if err != nil {
 				fmt.Println(errorStyle.Render("Error: ") + "Failed to send list_chain_transactions request: " + err.Error())
 				continue
 			}
 
 			log.Info("list_chain_transactions request sent, waiting for response...")
-			waitForPrettyResponse(responses, clientSecretKey, parsed.WalletPubKey)
+			waitForPrettyResponse(responses, clientSecretKey, parsed.WalletPubKey, eventID)
 
 		case "make_chain_address":
-			err := sendNWCRequest(ctx, pool, parsed, clientSecretKey, clientPubKey, MethodMakeChainAddress, nil)
+			eventID, err := sendNWCRequest(ctx, pool, parsed, clientSecretKey, clientPubKey, MethodMakeChainAddress, nil)
 			if err != nil {
 				fmt.Println(errorStyle.Render("Error: ") + "Failed to send make_chain_address request: " + err.Error())
 				continue
 			}
-			waitForPrettyResponse(responses, clientSecretKey, parsed.WalletPubKey)
+			waitForPrettyResponse(responses, clientSecretKey, parsed.WalletPubKey, eventID)
 
 		case "pay_chain_address":
 			if len(cmdParts) < 3 {
@@ -414,12 +398,12 @@ func main() {
 				"address": address,
 				"amount":  parseInt(amount),
 			}
-			err := sendNWCRequest(ctx, pool, parsed, clientSecretKey, clientPubKey, MethodPayChainAddress, params)
+			eventID, err := sendNWCRequest(ctx, pool, parsed, clientSecretKey, clientPubKey, MethodPayChainAddress, params)
 			if err != nil {
 				fmt.Println(errorStyle.Render("Error: ") + "Failed to send pay_chain_address request: " + err.Error())
 				continue
 			}
-			waitForPrettyResponse(responses, clientSecretKey, parsed.WalletPubKey)
+			waitForPrettyResponse(responses, clientSecretKey, parsed.WalletPubKey, eventID)
 
 		default:
 			fmt.Println(errorStyle.Render("Unrecognized command. Try: make_invoice, pay_invoice, get_balance, list_transactions, list_chain_transactions, make_chain_address, pay_chain_address, exit"))
@@ -491,7 +475,7 @@ func sendNWCRequest(
 	clientSecKey, clientPubKey string,
 	method NWCMethod,
 	params interface{},
-) error {
+) (string, error) {
 	log.WithFields(log.Fields{
 		"method":       method,
 		"relay":        nwc.Relay,
@@ -506,23 +490,26 @@ func sendNWCRequest(
 	bytesReq, err := json.Marshal(req)
 	if err != nil {
 		log.WithError(err).Error("Failed to marshal request")
-		return fmt.Errorf("failed to marshal request: %w", err)
+		return "", fmt.Errorf("failed to marshal request: %w", err)
 	}
 	log.WithField("request", string(bytesReq)).Debug("Marshalled request")
 
-	log.Debug("Computing shared secret")
+	log.WithFields(log.Fields{
+		"clientSecKey": clientSecKey,
+		"walletPubKey": nwc.WalletPubKey,
+	}).Debug("Computing shared secret with keys")
 	sharedSecret, err := nip04.ComputeSharedSecret(nwc.WalletPubKey, clientSecKey)
 	if err != nil {
 		log.WithError(err).Error("Failed to compute shared secret")
-		return fmt.Errorf("failed to compute shared secret: %w", err)
+		return "", fmt.Errorf("failed to compute shared secret: %w", err)
 	}
-	log.Debug("Successfully computed shared secret")
+	log.WithField("sharedSecretLen", len(sharedSecret)).Debug("Successfully computed shared secret")
 
 	log.Debug("Encrypting request content")
 	encryptedContent, err := nip04.Encrypt(string(bytesReq), sharedSecret)
 	if err != nil {
 		log.WithError(err).Error("Failed to nip04-encrypt request")
-		return fmt.Errorf("failed to nip04-encrypt request: %w", err)
+		return "", fmt.Errorf("failed to nip04-encrypt request: %w", err)
 	}
 	log.WithField("encryptedLength", len(encryptedContent)).Debug("Successfully encrypted content")
 
@@ -545,7 +532,7 @@ func sendNWCRequest(
 	ok, err := event.CheckSignature()
 	if err != nil || !ok {
 		log.WithError(err).WithField("valid", ok).Error("Event signature validation failed")
-		return fmt.Errorf("event signature validation failed: %v, %w", ok, err)
+		return "", fmt.Errorf("event signature validation failed: %v, %w", ok, err)
 	}
 	log.Debug("Event signature validated successfully")
 
@@ -561,7 +548,7 @@ func sendNWCRequest(
 			"relay": stat.Relay,
 			"error": stat.Error.Error(),
 		}).Error("Failed to publish to relay")
-		return fmt.Errorf("failed to publish event to %s: %w", nwc.Relay, stat.Error)
+		return "", fmt.Errorf("failed to publish event to %s: %w", nwc.Relay, stat.Error)
 	} else {
 		log.WithFields(log.Fields{
 			"relay":  stat.Relay,
@@ -575,34 +562,68 @@ func sendNWCRequest(
 	}).Info("Sent request successfully")
 
 	fmt.Println(successStyle.Render("✓ ") + "Sent request: " + string(method) + " (Event ID: " + highlightStyle.Render(event.ID) + ")")
-	return nil
+	return event.ID, nil
 }
 
 func waitForPrettyResponse(
 	responses chan nostr.Event,
 	clientSecKey string,
 	walletPubKey string,
+	expectedEventID string,
 ) {
 	fmt.Println(subtitleStyle.Render("Waiting for response..."))
-	select {
-	case resp := <-responses:
-		log.WithFields(log.Fields{
-			"eventID": resp.ID,
-			"pubkey":  resp.PubKey,
-		}).Debug("Received response event")
 
-		decrypted, err := decryptResponseContent(resp, clientSecKey, walletPubKey)
-		if err != nil {
-			log.WithError(err).Error("Error decrypting response")
-			fmt.Println(errorStyle.Render("Error: ") + "Failed to decrypt response: " + err.Error())
-		} else {
-			log.WithField("content", decrypted).Debug("Successfully decrypted response")
-			fmt.Println(subtitleStyle.Render("Response received (Event ID: ") + highlightStyle.Render(resp.ID) + subtitleStyle.Render(")"))
-			displayParsedResponse(decrypted)
+	timeout := time.After(10 * time.Second)
+	for {
+		select {
+		case resp := <-responses:
+			log.WithFields(log.Fields{
+				"eventID": resp.ID,
+				"pubkey":  resp.PubKey,
+			}).Debug("Received response event")
+
+			// Check if this response references our request
+			var referencedEvents []string
+			for _, tag := range resp.Tags {
+				if tag[0] == "e" && len(tag) > 1 {
+					referencedEvents = append(referencedEvents, tag[1])
+				}
+			}
+
+			isOurResponse := false
+			for _, refEventID := range referencedEvents {
+				if refEventID == expectedEventID {
+					isOurResponse = true
+					break
+				}
+			}
+
+			if !isOurResponse {
+				log.WithFields(log.Fields{
+					"responseEventID":  resp.ID,
+					"expectedEventID":  expectedEventID,
+					"referencedEvents": referencedEvents,
+				}).Debug("Ignoring response for different request")
+				continue
+			}
+
+			log.WithField("responseEventID", resp.ID).Info("Found matching response for our request")
+			decrypted, err := decryptResponseContent(resp, clientSecKey, walletPubKey)
+			if err != nil {
+				log.WithError(err).Error("Error decrypting response")
+				fmt.Println(errorStyle.Render("Error: ") + "Failed to decrypt response: " + err.Error())
+			} else {
+				log.WithField("content", decrypted).Debug("Successfully decrypted response")
+				fmt.Println(subtitleStyle.Render("Response received (Event ID: ") + highlightStyle.Render(resp.ID) + subtitleStyle.Render(")"))
+				displayParsedResponse(decrypted)
+			}
+			return
+
+		case <-timeout:
+			log.Warn("Timed out waiting for response")
+			fmt.Println(errorStyle.Render("Timed out waiting for response."))
+			return
 		}
-	case <-time.After(10 * time.Second):
-		log.Warn("Timed out waiting for response")
-		fmt.Println(errorStyle.Render("Timed out waiting for response."))
 	}
 }
 
@@ -621,19 +642,25 @@ func decryptResponseContent(ev nostr.Event, clientSecKey, walletPubKey string) (
 		"referencedEvents": referencedEvents,
 	}).Debug("Attempting to decrypt response content")
 
+	// Use the actual response pubkey for decryption, not the wallet pubkey from connection string
+	responsePubKey := ev.PubKey
 	if ev.PubKey != walletPubKey {
 		log.WithFields(log.Fields{
 			"expectedPubKey": walletPubKey,
 			"actualPubKey":   ev.PubKey,
-		}).Warn("Response pubkey doesn't match wallet pubkey")
+		}).Warn("Response pubkey doesn't match wallet pubkey, using actual response pubkey for decryption")
 	}
 
-	sharedSecret, err := nip04.ComputeSharedSecret(ev.PubKey, clientSecKey)
+	log.WithFields(log.Fields{
+		"responsePubKey": responsePubKey,
+		"clientSecKey":   clientSecKey,
+	}).Debug("Computing shared secret for decryption")
+	sharedSecret, err := nip04.ComputeSharedSecret(responsePubKey, clientSecKey)
 	if err != nil {
 		log.WithError(err).Error("Failed to compute shared secret for decryption")
 		return "", err
 	}
-	log.Debug("Computed shared secret for decryption")
+	log.WithField("sharedSecretLen", len(sharedSecret)).Debug("Computed shared secret for decryption")
 
 	decrypted, err := nip04.Decrypt(ev.Content, sharedSecret)
 	if err != nil {
